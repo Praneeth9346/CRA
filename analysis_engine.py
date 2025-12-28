@@ -36,7 +36,7 @@ class CryptoAnalyzer:
         # Get latest values
         current_price = self.data['Close'].iloc[-1]
         
-        # Handle cases where RSI might be NaN (start of data)
+        # Handle cases where RSI might be NaN
         rsi = self.data['RSI'].iloc[-1] if pd.notna(self.data['RSI'].iloc[-1]) else 50
         ema_50 = self.data['EMA_50'].iloc[-1] if pd.notna(self.data['EMA_50'].iloc[-1]) else current_price
         ema_200 = self.data['EMA_200'].iloc[-1] if pd.notna(self.data['EMA_200'].iloc[-1]) else current_price
@@ -118,31 +118,34 @@ class CryptoAnalyzer:
             yf_news = asset.news
             if yf_news:
                 for item in yf_news[:5]:
-                    news_items.append({
-                        "title": item.get('title'),
-                        "link": item.get('link'),
-                        "publisher": item.get('publisher', 'Yahoo Finance'),
-                    })
+                    title = item.get('title')
+                    # CRITICAL FIX: Only add if title is a valid string
+                    if title and isinstance(title, str):
+                        news_items.append({
+                            "title": title,
+                            "link": item.get('link'),
+                            "publisher": item.get('publisher', 'Yahoo Finance'),
+                        })
         except Exception:
-            pass # Continue to fallback
+            pass 
 
         # --- SOURCE 2: Google News RSS Fallback ---
-        # If Yahoo gave less than 2 stories, check Google
         if len(news_items) < 2:
             try:
-                # Create a search query like "Bitcoin crypto"
                 query = f"{self.clean_ticker} crypto currency"
                 url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
                 response = requests.get(url, timeout=5)
-                soup = BeautifulSoup(response.content, features="xml") # Parse XML
+                soup = BeautifulSoup(response.content, features="xml")
                 
-                items = soup.findAll('item')[:5] # Get top 5
+                items = soup.findAll('item')[:5] 
                 for item in items:
-                    news_items.append({
-                        "title": item.title.text,
-                        "link": item.link.text,
-                        "publisher": item.source.text if item.source else "Google News"
-                    })
+                    # Safety check for XML tags
+                    if item.title and item.title.text:
+                        news_items.append({
+                            "title": item.title.text,
+                            "link": item.link.text if item.link else "#",
+                            "publisher": item.source.text if item.source else "Google News"
+                        })
             except Exception as e:
                 print(f"Google News error: {e}")
 
@@ -154,16 +157,21 @@ class CryptoAnalyzer:
             return {"score": 0, "text": "Neutral (No News)", "news_list": []}
 
         for item in news_items:
-            blob = TextBlob(item['title'])
-            polarity = blob.sentiment.polarity
-            total_polarity += polarity
-            
-            analyzed_news.append({
-                "title": item['title'],
-                "publisher": item['publisher'],
-                "link": item['link'],
-                "sentiment": polarity
-            })
+            try:
+                # Double safety check before passing to TextBlob
+                if item['title']:
+                    blob = TextBlob(str(item['title']))
+                    polarity = blob.sentiment.polarity
+                    total_polarity += polarity
+                    
+                    analyzed_news.append({
+                        "title": item['title'],
+                        "publisher": item['publisher'],
+                        "link": item['link'],
+                        "sentiment": polarity
+                    })
+            except Exception:
+                continue # Skip bad items
 
         avg_polarity = total_polarity / len(analyzed_news) if analyzed_news else 0
         
@@ -198,7 +206,6 @@ class CryptoAnalyzer:
         elif fund['range_position'] > 90: score -= 10
 
         # Sentiment (30%)
-        # Scale sentiment from -1/1 range to -15/+15 points
         sent_impact = sent['score'] * 15
         score += sent_impact
 
